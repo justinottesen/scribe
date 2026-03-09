@@ -2,10 +2,11 @@
 
 /**
  * Concrete types built on top of the scribe core:
- *   - Level     — log severity enum
- *   - Message   — payload carrying a Level and a std::format-constructed string
+ *   - Level          — log severity enum
+ *   - Message        — payload carrying a Level and a std::format-constructed string
  *   - ConsoleHandler — writes formatted records to stdout
  *   - FileHandler    — writes formatted records to a file (append mode)
+ *   - LevelFilter    — chain-compatible handler that short-circuits below a minimum level
  */
 
 #include <cstdio>
@@ -95,6 +96,21 @@ public:
 
 private:
     std::unique_ptr<FILE, decltype(&std::fclose)> m_file;
+};
+
+/**
+ * A chain-compatible handler that short-circuits when the record's level is below
+ * min_level. Intended as the first element of a Chain.
+ *
+ * Example:
+ *   scribe::Chain{LevelFilter{Level::Warn}, ConsoleHandler{}}
+ */
+struct LevelFilter {
+    Level level{Level::Trace};
+
+    [[nodiscard]] auto handle(const Record<Message>& r) const -> bool {
+        return r.payload.level >= level;
+    }
 };
 
 }    // namespace scribe::defaults

@@ -48,6 +48,49 @@ To bound the queue and apply backpressure to producers:
 scribe::Logger<std::string, MyHandler, 1024> logger{MyHandler{}};
 ```
 
+## Utilities
+
+`<scribe/util.hpp>` provides handler composition utilities.
+
+### `scribe::Chain<Hs...>`
+
+Dispatches a record to each handler in sequence. If any handler returns `false` the chain short-circuits and subsequent handlers are skipped. Handlers returning `void` always continue.
+
+```cpp
+// Log to both console and file
+scribe::Logger<Message, scribe::Chain<ConsoleHandler, FileHandler>> logger{
+    scribe::Chain{ConsoleHandler{}, FileHandler{"app.log"}}
+};
+```
+
+Handlers used inside a `Chain` must accept `const Record<Payload>&` — since the record is shared across all chain members it cannot be moved.
+
+### `scribe::Filter<H, Pred>`
+
+Wraps a handler with a predicate. Records are forwarded to `H` only when `Pred(record)` returns `true`. Returns `false` when filtered, allowing an enclosing `Chain` to short-circuit.
+
+```cpp
+// Only log records from a specific thread
+scribe::Filter{ConsoleHandler{}, [tid = std::this_thread::get_id()](const auto& r) {
+    return r.tid == tid;
+}}
+```
+
+### Composing utilities
+
+`Chain` and `Filter` compose freely since both satisfy the `Handler` concept:
+
+```cpp
+// Filter by level, then fan out to console and file
+scribe::Chain{
+    LevelFilter{Level::Warn},
+    ConsoleHandler{},
+    FileHandler{"app.log"},
+}
+```
+
+---
+
 ## Defaults
 
 `<scribe/defaults.hpp>` provides ready-to-use types for common logging needs.
@@ -79,6 +122,14 @@ Timestamps are UTC.
 ### `scribe::defaults::FileHandler`
 
 Writes formatted records to a file in append mode. The buffer is flushed after every record, so output is visible immediately (e.g. via `tail -f`). Throws `std::system_error` if the file cannot be opened.
+
+### `scribe::defaults::LevelFilter`
+
+A chain-compatible handler that short-circuits when the record's level is below `min_level`. Returns `bool`, so placing it at the front of a `Chain` gates all subsequent handlers.
+
+```cpp
+scribe::Chain{LevelFilter{Level::Warn}, ConsoleHandler{}}
+```
 
 ### Using the defaults together
 

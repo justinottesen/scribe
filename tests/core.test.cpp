@@ -1,3 +1,5 @@
+#include <scribe/core.hpp>
+
 #include <atomic>
 #include <latch>
 #include <memory>
@@ -7,7 +9,6 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <scribe/core.hpp>
 
 namespace {
 
@@ -130,7 +131,8 @@ TEST(Logger, RecordMetadata) {
     EXPECT_EQ(captured.tid, caller_tid);
     EXPECT_GE(captured.time, before);
     EXPECT_LE(captured.time, after);
-    EXPECT_NE(std::string_view{captured.loc.file_name()}.find("scribe.test"),
+    EXPECT_NE(std::string_view{captured.loc.file_name()}.find(
+                  std::source_location::current().file_name()),
               std::string_view::npos);
 }
 
@@ -187,7 +189,7 @@ TEST(BoundedLogger, BlocksWhenFull) {
         std::atomic<bool>*     first;
         std::atomic<int>*      count;
 
-        void handle(scribe::Record<int>&& /*unused*/) const {
+        void handle(const scribe::Record<int>& /*unused*/) const {
             if (first->exchange(false, std::memory_order_acq_rel)) {
                 started->count_down();
                 gate->acquire();
@@ -237,7 +239,7 @@ TEST(BoundedLogger, DrainsOnDestroy) {
     struct CountHandler {
         std::atomic<int>* count;
 
-        void handle(scribe::Record<int>&& /*unused*/) const {
+        void handle(const scribe::Record<int>& /*unused*/) const {
             count->fetch_add(1, std::memory_order_relaxed);
         }
     };

@@ -1,10 +1,11 @@
 #include <scribe/defaults.hpp>
 
-#include <gtest/gtest.h>
-
 #include <filesystem>
 #include <fstream>
 #include <string>
+
+#include <gtest/gtest.h>
+#include <scribe/util.hpp>
 
 using namespace scribe::defaults;
 using scribe::Record;
@@ -13,6 +14,7 @@ using scribe::Record;
 
 static_assert(scribe::Handler<ConsoleHandler, Message>);
 static_assert(scribe::Handler<FileHandler, Message>);
+static_assert(scribe::Handler<LevelFilter, Message>);
 
 namespace {
 
@@ -29,6 +31,13 @@ auto read_file(const std::filesystem::path& path) -> std::string {
     std::ifstream f{path};
     return {std::istreambuf_iterator<char>{f}, {}};
 }
+
+// Used by the LevelFilter composition test.
+struct CountingHandler {
+    int* count;
+
+    void handle(const Record<Message>& /*unused*/) const { (*count)++; }
+};
 
 }    // namespace
 
@@ -51,8 +60,8 @@ TEST(Message, FormatsOnConstruction) {
 TEST(LevelString, MapsAllLevels) {
     EXPECT_EQ(detail::levelString(Level::Trace), "TRACE");
     EXPECT_EQ(detail::levelString(Level::Debug), "DEBUG");
-    EXPECT_EQ(detail::levelString(Level::Info),  "INFO ");
-    EXPECT_EQ(detail::levelString(Level::Warn),  "WARN ");
+    EXPECT_EQ(detail::levelString(Level::Info), "INFO ");
+    EXPECT_EQ(detail::levelString(Level::Warn), "WARN ");
     EXPECT_EQ(detail::levelString(Level::Error), "ERROR");
     EXPECT_EQ(detail::levelString(Level::Fatal), "FATAL");
 }
@@ -72,8 +81,8 @@ TEST(FormatRecord, LevelIsBracketed) {
 
 TEST(FormatRecord, TimestampPrecedesLevel) {
     auto line    = detail::formatRecord(make_record({Level::Debug, "msg"}));
-    auto ts      = line.find('-');   // first '-' is from YYYY-MM-DD
-    auto bracket = line.find('[');   // '[' opens the level field
+    auto ts      = line.find('-');    // first '-' is from YYYY-MM-DD
+    auto bracket = line.find('[');    // '[' opens the level field
     EXPECT_NE(ts, std::string::npos);
     EXPECT_NE(bracket, std::string::npos);
     EXPECT_LT(ts, bracket);
@@ -90,9 +99,8 @@ TEST(ConsoleHandler, HandleDoesNotCrash) {
 
 class FileHandlerTest : public testing::Test {
 protected:
-    std::filesystem::path m_path{
-        std::filesystem::temp_directory_path() / "scribe_defaults_test.log"
-    };
+    std::filesystem::path m_path{std::filesystem::temp_directory_path()
+                                 / "scribe_defaults_test.log"};
 
     void TearDown() override { std::filesystem::remove(m_path); }
 };
@@ -131,4 +139,32 @@ TEST_F(FileHandlerTest, AppendsAcrossInstances) {
     auto contents = read_file(m_path);
     EXPECT_NE(contents.find("first session"), std::string::npos);
     EXPECT_NE(contents.find("second session"), std::string::npos);
+}
+
+// --- LevelFilter ---
+
+TEST(LevelFilter, PassesAtAndAboveMinLevel) {
+    LevelFilter f{Level::Warn};
+    EXPECT_TRUE(f.handle(make_record({Level::Warn, "at threshold"})));
+    EXPECT_TRUE(f.handle(make_record({Level::Error, "above threshold"})));
+    EXPECT_TRUE(f.handle(make_record({Level::Fatal, "above threshold"})));
+}
+
+TEST(LevelFilter, DropsBelow) {
+    LevelFilter f{Level::Warn};
+    EXPECT_FALSE(f.handle(make_record({Level::Trace, "below threshold"})));
+    EXPECT_FALSE(f.handle(make_record({Level::Debug, "below threshold"})));
+    EXPECT_FALSE(f.handle(make_record({Level::Info, "below threshold"})));
+}
+
+// LevelFilter short-circuits a Chain, preventing subsequent handlers from running.
+TEST(LevelFilter, GatesSubsequentHandlersInChain) {
+    int                 count = 0;
+    scribe::util::Chain chain{LevelFilter{Level::Warn}, CountingHandler{&count}};
+
+    chain.handle(make_record({Level::Info, "below — dropped"}));
+    EXPECT_EQ(count, 0);
+
+    chain.handle(make_record({Level::Error, "above — passes"}));
+    EXPECT_EQ(count, 1);
 }
