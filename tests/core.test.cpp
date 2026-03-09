@@ -1,5 +1,3 @@
-#include <scribe/scribe.hpp>
-
 #include <atomic>
 #include <latch>
 #include <memory>
@@ -9,6 +7,7 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <scribe/core.hpp>
 
 namespace {
 

@@ -2,7 +2,7 @@ find_package(GTest REQUIRED)
 
 add_executable(scribe.test)
 target_sources(scribe.test PRIVATE
-    scribe.test.cpp
+    core.test.cpp
     defaults.test.cpp
 )
 target_link_libraries(

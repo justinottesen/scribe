@@ -19,7 +19,7 @@
 #include <system_error>
 #include <utility>
 
-#include <scribe/scribe.hpp>
+#include <scribe/core.hpp>
 
 namespace scribe::defaults {
 
