@@ -4,6 +4,7 @@
 #include <latch>
 #include <memory>
 #include <mutex>
+#include <semaphore>
 #include <thread>
 #include <vector>
 
@@ -157,6 +158,97 @@ TEST(Logger, MultipleProducers) {
 
     done.wait();
     EXPECT_EQ(received.size(), static_cast<std::size_t>(TOTAL));
+}
+
+// Bounded logger delivers all messages, even when total exceeds Capacity.
+TEST(BoundedLogger, ReceivesMessages) {
+    constexpr std::size_t CAP   = 4;
+    constexpr int         TOTAL = 100;
+    std::vector<int>      received;
+    std::mutex            mtx;
+    std::latch            done{TOTAL};
+
+    scribe::Logger<int, CollectHandler<int>, CAP> logger{
+        CollectHandler<int>{.out = &received, .mtx = &mtx, .latch = &done}
+    };
+    for (int i = 0; i < TOTAL; i++) { logger.log(i); }
+    done.wait();
+
+    ASSERT_EQ(received.size(), static_cast<std::size_t>(TOTAL));
+}
+
+// log() blocks when the queue is full and unblocks when the consumer makes space.
+TEST(BoundedLogger, BlocksWhenFull) {
+    constexpr std::size_t CAP = 4;
+
+    // Only the first handler call blocks; subsequent calls return immediately.
+    struct GatingHandler {
+        std::latch*            started;
+        std::binary_semaphore* gate;
+        std::atomic<bool>*     first;
+        std::atomic<int>*      count;
+
+        void handle(scribe::Record<int>&& /*unused*/) const {
+            if (first->exchange(false, std::memory_order_acq_rel)) {
+                started->count_down();
+                gate->acquire();
+            }
+            count->fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+
+    std::latch            started{1};
+    std::binary_semaphore gate{0};
+    std::atomic<bool>     first{true};
+    std::atomic<int>      count{0};
+
+    scribe::Logger<int, GatingHandler, CAP> logger{
+        GatingHandler{.started = &started, .gate = &gate, .first = &first, .count = &count}
+    };
+
+    // Record 1: consumer picks it up immediately and blocks in the handler.
+    logger.log(1);
+    started.wait();
+
+    // Consumer is blocked. Fill the queue to capacity.
+    for (std::size_t i = 0; i < CAP; i++) { logger.log(static_cast<int>(i) + 2); }
+
+    // This push must block — the queue is full and the consumer is busy.
+    std::atomic<bool> pushed{false};
+    std::jthread      pusher{[&] -> void {
+        logger.log(99);
+        pushed.store(true, std::memory_order_release);
+    }};
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_FALSE(pushed.load(std::memory_order_acquire));
+
+    // Release the handler — consumer finishes record 1, makes space, pusher unblocks.
+    gate.release();
+    pusher.join();
+    EXPECT_TRUE(pushed.load(std::memory_order_acquire));
+}
+
+// Bounded logger drains all records before destruction, even when pushed past capacity.
+TEST(BoundedLogger, DrainsOnDestroy) {
+    constexpr std::size_t CAP = 8;
+    constexpr int         N   = 100;
+    std::atomic<int>      count{0};
+
+    struct CountHandler {
+        std::atomic<int>* count;
+
+        void handle(scribe::Record<int>&& /*unused*/) const {
+            count->fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+
+    {
+        scribe::Logger<int, CountHandler, CAP> logger{CountHandler{&count}};
+        for (int i = 0; i < N; i++) { logger.log(i); }
+    }
+
+    EXPECT_EQ(count.load(), N);
 }
 
 // Logger works with move-only payload types.

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <source_location>
@@ -45,15 +46,23 @@ concept Handler = requires(H h) { h.handle(std::declval<Record<Payload>>()); };
  * blocked on handler execution. Records are delivered to the handler in the order they
  * were enqueued. On destruction, the consumer thread drains the queue before joining,
  * so no records are lost.
+ *
+ * Capacity sets the maximum number of records the queue may hold. When the queue is full,
+ * log() blocks until the consumer makes space. The default is unbounded.
  */
-template <std::movable Payload, Handler<Payload> H>
+template <std::movable Payload, Handler<Payload> H,
+          std::size_t Capacity = std::numeric_limits<std::size_t>::max()>
 class Logger {
+    static constexpr bool bounded = Capacity != std::numeric_limits<std::size_t>::max();
+
+    struct NoCV {};
+
 public:
     explicit Logger(H handler)
         : m_handler(std::move(handler))
         , m_consumer(std::bind_front(&Logger::consume, this)) {}
 
-    ~Logger() = default;    // jthread requests stop and joins, draining the queue first
+    ~Logger() = default;
 
     Logger(const Logger&)                    = delete;
     auto operator=(const Logger&) -> Logger& = delete;
@@ -62,7 +71,10 @@ public:
 
     auto log(Payload payload, std::source_location loc = std::source_location::current()) -> void {
         {
-            std::lock_guard lock(m_mutex);
+            std::unique_lock lock(m_mutex);
+            if constexpr (bounded) {
+                m_not_full.wait(lock, [this] -> auto { return m_queue.size() < Capacity; });
+            }
             m_queue.push(Record<Payload>{
                 .loc     = loc,
                 .time    = std::chrono::system_clock::now(),
@@ -74,17 +86,19 @@ public:
     }
 
 private:
-    H                           m_handler;
-    std::queue<Record<Payload>> m_queue;
-    std::mutex                  m_mutex;
-    std::condition_variable_any m_cv;
-    std::jthread                m_consumer;
+    H                                                                                m_handler;
+    std::queue<Record<Payload>>                                                      m_queue;
+    std::mutex                                                                       m_mutex;
+    std::condition_variable_any                                                      m_cv;
+    [[no_unique_address]] std::conditional_t<bounded, std::condition_variable, NoCV> m_not_full;
+    std::jthread                                                                     m_consumer;
 
     auto consume(std::stop_token st) -> void {
         std::unique_lock lock(m_mutex);
         while (m_cv.wait(lock, st, [this] -> auto { return !m_queue.empty(); })) {
             auto record = std::move(m_queue.front());
             m_queue.pop();
+            if constexpr (bounded) { m_not_full.notify_one(); }
             lock.unlock();
 
             m_handler.handle(std::move(record));

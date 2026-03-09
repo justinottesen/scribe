@@ -24,6 +24,7 @@ A performant, parallel C++ logging library built on C++26.
 - Records are delivered to the handler in the order they were enqueued.
 - Parallelism across loggers is natural: each logger has its own consumer thread.
 - On destruction, the consumer thread drains the queue before joining — no records are lost.
+- An optional `Capacity` template parameter bounds the queue size. When the queue is full, `log()` blocks until the consumer makes space, providing backpressure. The default is unbounded.
 
 ### Example
 
@@ -39,6 +40,12 @@ int main() {
 
     logger.log("hello from any thread");
 }
+```
+
+To bound the queue and apply backpressure to producers:
+
+```cpp
+scribe::Logger<std::string, MyHandler, 1024> logger{MyHandler{}};
 ```
 
 ## Requirements
