@@ -48,6 +48,58 @@ To bound the queue and apply backpressure to producers:
 scribe::Logger<std::string, MyHandler, 1024> logger{MyHandler{}};
 ```
 
+## Defaults
+
+`<scribe/defaults.hpp>` provides ready-to-use types for common logging needs.
+
+### `scribe::defaults::Level`
+
+```cpp
+enum class Level : std::uint8_t { Trace, Debug, Info, Warn, Error, Fatal };
+```
+
+### `scribe::defaults::Message`
+
+A payload type that eagerly formats its text at the call site using `std::format`:
+
+```cpp
+scribe::defaults::Message{Level::Warn, "retrying in {}ms", delay}
+```
+
+Formatting happens on the producer thread, keeping the consumer handler fast.
+
+### `scribe::defaults::ConsoleHandler`
+
+Writes formatted records to stdout. A static mutex serialises output across all `ConsoleHandler` instances, preventing interleaved lines when multiple loggers share the console.
+
+Output format: `2024-01-01 12:00:00 [INFO ] message text`
+
+Timestamps are UTC.
+
+### `scribe::defaults::FileHandler`
+
+Writes formatted records to a file in append mode. The buffer is flushed after every record, so output is visible immediately (e.g. via `tail -f`). Throws `std::system_error` if the file cannot be opened.
+
+### Using the defaults together
+
+```cpp
+#include <scribe/defaults.hpp>
+
+using namespace scribe::defaults;
+
+int main() {
+    scribe::Logger<Message, ConsoleHandler> logger{ConsoleHandler{}};
+
+    logger.log(Message{Level::Info, "started up"});
+    logger.log(Message{Level::Warn, "retrying in {}ms", 500});
+}
+```
+
+```cpp
+// Log to a file with a bounded queue
+scribe::Logger<Message, FileHandler, 1024> logger{FileHandler{"app.log"}};
+```
+
 ## Requirements
 
 - C++26
